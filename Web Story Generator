@@ -1,0 +1,205 @@
+<?php
+/*
+Plugin Name: Web Story Generator
+Description: A plugin to create and publish web stories.
+Version: 1.0
+Author: Your Name
+*/
+
+// Add a menu item for the plugin in the WordPress admin menu
+function web_story_generator_menu() {
+    add_menu_page(
+        'Web Story Generator',
+        'Web Story Generator',
+        'manage_options',
+        'web-story-generator',
+        'web_story_generator_page'
+    );
+}
+add_action('admin_menu', 'web_story_generator_menu');
+
+// Display the plugin settings page
+function web_story_generator_page() {
+    ?>
+    <div class="wrap">
+        <h2>Create Web Story</h2>
+        <form action="" method="post">
+            <label for="story_title">Web Story Title:</label><br>
+            <input type="text" id="story_title" name="story_title" required><br><br>
+
+            <label for="image_query">Image Query:</label><br>
+            <input type="text" id="image_query" name="image_query" required><br><br>
+
+            <input type="submit" name="publish_story" value="Publish">
+        </form>
+    </div>
+    <?php
+}
+
+// Handle form submission
+function handle_web_story_submission() {
+    if (isset($_POST['publish_story'])) {
+        $story_title = sanitize_text_field($_POST['story_title']);
+        $image_query = sanitize_text_field($_POST['image_query']);
+        $slides = array();
+
+        // Fetch text using ChatGPT API
+        $api_key = 'sk-proj-p6borJQnqhGInJy8jmzDT3BlbkFJUNOVxnhdr4qUas5Fh7sC'; // Replace with your actual ChatGPT API key
+        $sentences = generateSentences($story_title, $api_key);
+
+        if (isset($sentences['error'])) {
+            echo '<div class="error"><p>Failed to generate sentences. Please try again.</p></div>';
+            return;
+        }
+
+        // Fetch images using Google Custom Search API
+        $google_api_key = 'AIzaSyAkN0XpXGjpKALrg9gtqa4Z6Grt4eT0I4A'; // Replace with your Google API key
+        $cse_id = '457719cf9b6de4993'; // Replace with your Custom Search Engine ID
+        $selected_images = get_random_images($image_query, $google_api_key, $cse_id);
+
+        if (isset($selected_images['error'])) {
+            echo '<div class="error"><p>Failed to fetch images. Please try again.</p></div>';
+            return;
+        }
+
+        // Use the generated text and fetched images for the slides
+        for ($i = 0; $i < 9; $i++) {
+            $slide_text = isset($sentences['choices'][0]['text']) ? explode("\n\n", trim($sentences['choices'][0]['text']))[$i] : '';
+            $slide_image_url = $selected_images[$i];
+
+            // Filter out unwanted words
+            $slide_text = str_ireplace(array('slide', 'title', 'introduction'), '', $slide_text);
+
+            // Prepare slide data
+            $slides[] = array(
+                'title' => $slide_text,
+                'image' => $slide_image_url
+            );
+        }
+
+        $poster_image_url = $selected_images[0]; // Using the first image as the poster image
+
+        // Publish the story
+        $post_id = create_web_story($story_title, $slides, $poster_image_url);
+
+        if ($post_id) {
+            echo '<div class="updated"><p>Story published successfully! <a href="' . get_permalink($post_id) . '" target="_blank">View Story</a></p></div>';
+        } else {
+            echo '<div class="error"><p>Failed to publish story.</p></div>';
+        }
+    }
+}
+add_action('admin_init', 'handle_web_story_submission');
+
+// Function to generate sentences using the ChatGPT API
+function generateSentences($story_title, $api_key) {
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, 'https://api.openai.com/v1/completions');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    $postdata = [
+        "model" => "gpt-3.5-turbo-instruct",
+        "prompt" => "Create 9 slides for a web story on the topic: '$story_title'. Each slide should have a paragraph of 10-30 words. Avoid using words like slide, title, or introduction.",
+        "temperature" => 1,
+        "max_tokens" => 1000,
+        "top_p" => 1,
+        "frequency_penalty" => 0,
+        "presence_penalty" => 0
+    ];
+    $postdata_json = json_encode($postdata);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $postdata_json);
+    $headers = array();
+    $headers[] = 'Content-Type: application/json';
+    $headers[] = 'Authorization: Bearer ' . $api_key;
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+
+    $result = curl_exec($ch);
+    if (curl_errno($ch)) {
+        return ['error' => 'Curl error: ' . curl_error($ch)];
+    }
+    curl_close($ch);
+
+    if ($result === false) {
+        return ['error' => 'CURL request failed'];
+    } else {
+        return json_decode($result, true);
+    }
+}
+
+// Function to get 9 images from Google Custom Search API
+function get_random_images($query, $apiKey, $cseId) {
+    $numImages = 9;
+    $url = "https://www.googleapis.com/customsearch/v1?key=$apiKey&cx=$cseId&q=" . urlencode($query) . "&searchType=image&num=$numImages&imgSize=large&imgType=photo&imgColorType=color";
+    $imageUrls = array();
+    $response = wp_remote_get($url);
+
+    if (is_wp_error($response)) {
+        return ['error' => 'Unable to fetch data'];
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+
+    if (isset($data['items'])) {
+        foreach ($data['items'] as $item) {
+            $imageUrls[] = $item['link'];
+        }
+    } else {
+        return ['error' => 'No search results found'];
+    }
+
+    return $imageUrls;
+}
+
+// Function to publish the web story using the Google Web Stories plugin API
+function create_web_story($title, $slides, $poster_image_url) {
+    // Check if the Web Stories plugin is active
+    if (!function_exists('register_block_type_from_metadata')) {
+        return false;
+    }
+
+    // Prepare the story content
+    $publisher_logo_src = 'https://i.pinimg.com/736x/a0/50/f2/a050f2d9743511ed75e0086dc50629dd.jpg'; // Replace with your actual publisher logo URL
+    $publisher = 'Your Publisher Name'; // Replace with your actual publisher name
+    $story_content = '<amp-story standalone poster-portrait-src="' . esc_url_raw($poster_image_url) . '" publisher-logo-src="' . esc_url_raw($publisher_logo_src) . '" publisher="' . esc_attr($publisher) . '" title="' . esc_attr($title) . '">';
+
+    foreach ($slides as $index => $slide) {
+        $slide_text = $slide['title'];
+        $slide_image_url = $slide['image'];
+
+        $story_content .= '<amp-story-page id="page' . ($index + 1) . '">';
+        $story_content .= '<amp-story-grid-layer template="fill">';
+        $story_content .= '<amp-img src="' . esc_url_raw($slide_image_url) . '" width="720" height="1280" layout="responsive" alt=""></amp-img>';
+        $story_content .= '</amp-story-grid-layer>';
+        $story_content .= '<amp-story-grid-layer template="vertical">';
+        $story_content .= '<div style="background-color: black; padding: 10px;"><p style="color: white;">' . nl2br(esc_html($slide_text)) . '</p></div>';
+        $story_content .= '</amp-story-grid-layer>';
+        $story_content .= '</amp-story-page>';
+    }
+
+    // Add the fixed last slide with image and text
+    $story_content .= '<amp-story-page id="page10">';
+    $story_content .= '<amp-story-grid-layer template="fill">';
+    $story_content .= '<amp-img src="https://blog.cdn.level.game/2023/09/manishaleveldesigner_render_an_image_of_lord_ganesha_for_the_to_e2387298-42a4-4038-aaba-4f2d16c4550b-1.png" width="720" height="1280" layout="responsive" alt=""></amp-img>';
+    $story_content .= '</amp-story-grid-layer>';
+    $story_content .= '<amp-story-grid-layer template="vertical">';
+    $story_content .= '<div style="background-color: black; padding: 10px;"><p style="color: white;">Thank you</p></div>';
+    $story_content .= '</amp-story-grid-layer>';
+    $story_content .= '</amp-story-page>';
+
+    $story_content .= '</amp-story>';
+
+    // Create the story post
+    $story_post = array(
+        'post_title' => $title,
+        'post_type' => 'web-story',
+        'post_content' => $story_content,
+        'post_status' => 'publish'
+    );
+
+    // Insert the post into the database
+    $post_id = wp_insert_post($story_post);
+
+    return $post_id;
+}
+?>
+
