@@ -44,7 +44,7 @@ function handle_web_story_submission() {
         $slides = array();
 
         // Fetch text using ChatGPT API
-        $api_key = 'sk-proj-p6borJQnqhGInJy8jmzDT3BlbkFJUNOVxnhdr4qUas5Fh7sC'; // Replace with your actual ChatGPT API key
+        $api_key = 'api key'; // Replace with your actual ChatGPT API key
         $sentences = generateSentences($story_title, $api_key);
 
         if (isset($sentences['error'])) {
